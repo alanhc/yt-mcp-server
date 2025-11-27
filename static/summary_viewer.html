@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 頻道摘要查看器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .input-section {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 30px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .input-group input,
+        .input-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .input-group input:focus,
+        .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 20px;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .results {
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .result-card {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .result-card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .result-card h3 {
+            color: #555;
+            margin: 20px 0 10px;
+            font-size: 1.3rem;
+        }
+
+        .video-list {
+            list-style: none;
+            margin: 15px 0;
+        }
+
+        .video-list li {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .video-list li::before {
+            content: "✅";
+            font-size: 1.2rem;
+        }
+
+        .video-list li.error::before {
+            content: "❌";
+        }
+
+        .summary-content {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 12px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            font-size: 1.05rem;
+        }
+
+        .content-wrapper {
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #555;
+            transition: all 0.2s;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .copy-btn:hover {
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            color: #667eea;
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .raw-content {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 40px 20px 20px;
+            /* Add top padding for button */
+            border-radius: 12px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .summary-content {
+            background: #f8f9fa;
+            padding: 40px 20px 20px;
+            /* Add top padding for button */
+            border-radius: 12px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            font-size: 1.05rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .meta-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .meta-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .meta-item strong {
+            display: block;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        /* Markdown Styles within summary content */
+        .markdown-body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 15px;
+            line-height: 1.5;
+            /* Reduced from 1.6 */
+            color: #374151;
+        }
+
+        .markdown-body h1,
+        .markdown-body h2,
+        .markdown-body h3 {
+            margin-top: 1.0em;
+            /* Reduced from 1.2em */
+            margin-bottom: 0.5em;
+            /* Reduced from 0.6em */
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .markdown-body h1 {
+            font-size: 1.8em;
+            border-bottom: 2px solid #f3f4f6;
+            padding-bottom: 0.3em;
+        }
+
+        .markdown-body h2 {
+            font-size: 1.4em;
+            border-bottom: 1px solid #f3f4f6;
+            padding-bottom: 0.3em;
+        }
+
+        .markdown-body h3 {
+            font-size: 1.2em;
+        }
+
+        .markdown-body p {
+            margin-bottom: 0.6em;
+            /* Reduced from 0.8em */
+        }
+
+        .markdown-body ul,
+        .markdown-body ol {
+            padding-left: 1.5em;
+            margin-bottom: 0.6em;
+            /* Reduced from 0.8em */
+        }
+
+        .markdown-body li {
+            margin-bottom: 0.1em;
+            /* Reduced from 0.2em */
+        }
+
+        .markdown-body table {
+            display: block;
+            width: 100%;
+            overflow-x: auto;
+            margin: 1.5em 0;
+            border-collapse: collapse;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+
+        .markdown-body th {
+            background-color: #f9fafb;
+            font-weight: 600;
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .markdown-body td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .markdown-body tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Chunk Card Styles */
+        .chunk-card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .chunk-header {
+            padding: 16px 20px;
+            background: #f8fafc;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e5e7eb;
+            transition: background 0.2s;
+        }
+
+        .chunk-header:hover {
+            background: #f1f5f9;
+        }
+
+        .chunk-title {
+            font-weight: 600;
+            color: #4f46e5;
+            font-size: 1rem;
+        }
+
+        .chunk-meta {
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        .chunk-body {
+            padding: 20px;
+            display: none;
+            background: #fff;
+        }
+
+        .chunk-body.show {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📺 YouTube 頻道摘要查看器</h1>
+            <p>使用 AI 自動生成影片摘要</p>
+        </div>
+
+        <div class="input-section" id="input-section">
+            <div class="input-group">
+                <label for="channelUrl">YouTube 頻道 URL</label>
+                <input type="text" id="channelUrl" placeholder="https://www.youtube.com/@username/streams"
+                    value="https://www.youtube.com/@yutinghaofinance/streams">
+            </div>
+
+            <div class="input-group">
+                <label for="maxVideos">分析影片數量</label>
+                <select id="maxVideos">
+                    <option value="1" selected>1 部（最新）</option>
+
+                </select>
+            </div>
+
+            <button class="btn" onclick="analyzChannel()">
+                🚀 開始分析
+            </button>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在分析頻道...</p>
+            <p style="color: #666; margin-top: 10px;">這可能需要幾分鐘，請稍候</p>
+        </div>
+
+        <div class="error-message" id="error"></div>
+
+        <div class="results" id="results">
+            <div class="result-card">
+                <h2>📊 分析結果</h2>
+
+                <div class="meta-info">
+                    <div class="meta-item">
+                        <strong>頻道</strong>
+                        <span id="channelName"></span>
+                    </div>
+                    <div class="meta-item">
+                        <strong>分析影片數</strong>
+                        <span id="videoCount"></span>
+                    </div>
+                    <div class="meta-item">
+                        <strong>生成時間</strong>
+                        <span id="generatedAt"></span>
+                    </div>
+                </div>
+
+                <h3>處理的影片</h3>
+                <ul class="video-list" id="videoList"></ul>
+
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('summary')">
+                        📝 AI 摘要
+                    </button>
+                    <button class="tab" onclick="switchTab('chunks')" id="chunksTab" style="display: none;">
+                        🧩 分段摘要
+                    </button>
+                    <button class="tab" onclick="switchTab('raw')">
+                        📄 原始字幕
+                    </button>
+                </div>
+
+                <div class="tab-content active" id="summary-tab">
+                    <div class="content-wrapper">
+                        <button class="copy-btn" onclick="copyToClipboard('summaryContent', this)">
+                            📋 複製摘要
+                        </button>
+                        <div class="summary-content markdown-body" id="summaryContent"></div>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="chunks-tab">
+                    <div id="chunksContainer"></div>
+                </div>
+
+                <div class="tab-content" id="raw-tab">
+                    <div class="content-wrapper">
+                        <button class="copy-btn" onclick="copyToClipboard('rawContent', this)">
+                            📋 複製原始字幕
+                        </button>
+                        <div class="raw-content" id="rawContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add marked library for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        async function copyToClipboard(elementId, btn) {
+            const text = document.getElementById(elementId).innerText;
+            const originalText = btn.innerHTML;
+
+            try {
+                await navigator.clipboard.writeText(text);
+                btn.innerHTML = '✅ 已複製！';
+                btn.style.color = '#28a745';
+                btn.style.borderColor = '#28a745';
+
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.style.color = '';
+                    btn.style.borderColor = '';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+                alert('複製失敗');
+            }
+        }
+
+        function switchTab(tab) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(tab + '-tab').classList.add('active');
+        }
+
+        function displayChunks(chunks) {
+            const container = document.getElementById('chunksContainer');
+            container.innerHTML = '';
+
+            if (!chunks || chunks.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">本摘要未使用分段處理</p>';
+                return;
+            }
+
+            chunks.forEach((chunk, index) => {
+                const chunkCard = document.createElement('div');
+                chunkCard.className = 'chunk-card';
+
+                const chunkHeader = document.createElement('div');
+                chunkHeader.className = 'chunk-header';
+                chunkHeader.innerHTML = `
+                    <span class="chunk-title">🧩 第 ${index + 1} 部分</span>
+                    <span class="chunk-meta">
+                        ${chunk.chunk_length ? chunk.chunk_length + ' 字' : ''} 
+                        ${chunk.cached_at ? ' • ' + new Date(chunk.cached_at).toLocaleTimeString() : ''}
+                        <span style="margin-left: 8px;">▼</span>
+                    </span>
+                `;
+
+                const chunkBody = document.createElement('div');
+                chunkBody.className = 'chunk-body markdown-body';
+                chunkBody.innerHTML = marked.parse(chunk.summary || '無摘要');
+
+                chunkHeader.onclick = () => {
+                    const isVisible = chunkBody.classList.contains('show');
+                    if (isVisible) {
+                        chunkBody.classList.remove('show');
+                        chunkHeader.querySelector('.chunk-meta span:last-child').innerHTML = `▼`;
+                    } else {
+                        chunkBody.classList.add('show');
+                        chunkHeader.querySelector('.chunk-meta span:last-child').innerHTML = `▲`;
+                    }
+                };
+
+                chunkCard.appendChild(chunkHeader);
+                chunkCard.appendChild(chunkBody);
+                container.appendChild(chunkCard);
+            });
+        }
+
+        async function analyzChannel() {
+            const channelUrl = document.getElementById('channelUrl').value;
+            const maxVideos = parseInt(document.getElementById('maxVideos').value);
+
+            if (!channelUrl) {
+                alert('請輸入 YouTube 頻道 URL');
+                return;
+            }
+
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('results').classList.remove('show');
+            document.getElementById('error').classList.remove('show');
+
+            try {
+                const response = await fetch('/youtube/channel/summary', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: channelUrl,
+                        max_videos: maxVideos
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '請求失敗');
+                }
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                document.getElementById('error').textContent = '錯誤：' + error.message;
+                document.getElementById('error').classList.add('show');
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        async function loadFromCache(cacheKey, type) {
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('results').classList.remove('show');
+            document.getElementById('input-section').style.display = 'none'; // Hide input section when viewing result
+
+            try {
+                let apiUrl = `/api/summary/${cacheKey}`;
+                if (type === 'podcast') {
+                    apiUrl = `/api/podcast/summary/${cacheKey}`;
+                }
+
+                const response = await fetch(apiUrl);
+
+                if (!response.ok) {
+                    throw new Error('找不到該摘要記錄');
+                }
+
+                const data = await response.json();
+
+                // Pre-fill input fields if available
+                if (data.channel_url) {
+                    document.getElementById('channelUrl').value = data.channel_url;
+                }
+
+                displayResults(data);
+
+            } catch (error) {
+                document.getElementById('error').textContent = '錯誤：' + error.message;
+                document.getElementById('error').classList.add('show');
+                document.getElementById('input-section').style.display = 'block'; // Show input on error
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        window.onload = function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const cacheKey = urlParams.get('id');
+            const type = urlParams.get('type');
+
+            if (cacheKey) {
+                loadFromCache(cacheKey, type);
+            }
+        }
+
+        function displayResults(data) {
+            // Check if it's podcast data or channel summary
+            const isPodcast = data.transcribed_part !== undefined;
+
+            if (isPodcast) {
+                // Handle Podcast Data
+                document.getElementById('channelName').textContent = "Podcast Episode";
+                document.getElementById('videoCount').textContent = "1";
+                document.getElementById('generatedAt').textContent = new Date().toLocaleString('zh-TW'); // Podcast cache doesn't have generated_at in root
+
+                // Update video list (single episode)
+                const videoList = document.getElementById('videoList');
+                videoList.innerHTML = '';
+                const li = document.createElement('li');
+                li.textContent = data.title;
+                videoList.appendChild(li);
+
+                // Format transcript for display
+                let transcriptText = "";
+                let rawText = "";
+
+                // Sort timestamps
+                const timestamps = Object.keys(data.transcribed_part).map(Number).sort((a, b) => a - b);
+
+                timestamps.forEach(ts => {
+                    const text = data.transcribed_part[ts];
+                    const formattedTs = new Date(ts * 1000).toISOString().substr(11, 8);
+                    const line = `[${formattedTs}] ${text}`;
+                    transcriptText += line + "\n\n";
+                    rawText += line + "\n";
+                });
+
+                // Update summary content
+                if (data.summary) {
+                    document.getElementById('summaryContent').innerHTML = marked.parse(data.summary);
+                    document.querySelector('.tab[onclick="switchTab(\'summary\')"]').textContent = "📝 AI 摘要";
+                } else {
+                    document.getElementById('summaryContent').textContent = transcriptText;
+                    document.querySelector('.tab[onclick="switchTab(\'summary\')"]').textContent = "📝 逐字稿";
+                }
+
+                document.getElementById('rawContent').textContent = rawText;
+
+                // Handle Chunks
+                if (data.chunks && data.chunks.length > 0) {
+                    document.getElementById('chunksTab').style.display = 'block';
+                    displayChunks(data.chunks);
+                } else {
+                    document.getElementById('chunksTab').style.display = 'none';
+                }
+
+            } else {
+                // Handle YouTube Channel Summary Data
+                document.getElementById('channelName').textContent = data.channel_url;
+                document.getElementById('videoCount').textContent = data.videos_analyzed;
+                document.getElementById('generatedAt').textContent = new Date(data.generated_at).toLocaleString('zh-TW');
+
+                // Update video list
+                const videoList = document.getElementById('videoList');
+                videoList.innerHTML = '';
+                data.videos_processed.forEach(video => {
+                    const li = document.createElement('li');
+                    if (!video.has_subtitles) {
+                        li.classList.add('error');
+                    }
+                    li.textContent = video.title;
+                    videoList.appendChild(li);
+                });
+
+                // Update summary with Markdown rendering
+                document.getElementById('summaryContent').innerHTML = marked.parse(data.summary);
+
+                // Update raw content
+                document.getElementById('rawContent').textContent = data.raw || '無原始內容';
+
+                // Reset tab label
+                document.querySelector('.tab[onclick="switchTab(\'summary\')"]').textContent = "📝 AI 摘要";
+
+                // Handle Chunks
+                if (data.chunks && data.chunks.length > 0) {
+                    document.getElementById('chunksTab').style.display = 'block';
+                    displayChunks(data.chunks);
+                } else {
+                    document.getElementById('chunksTab').style.display = 'none';
+                }
+            }
+
+            // Show results
+            document.getElementById('results').classList.add('show');
+
+            // Scroll to results
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+
+</html>

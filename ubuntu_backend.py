@@ -545,6 +545,7 @@ def get_subtitles(request: VideoRequest):
     if cached_result:
         return cached_result["result"]
     
+    # First, try to get subtitles
     ydl_opts = {
         'writesubtitles': True,
         'writeautomaticsub': True,
@@ -568,40 +569,121 @@ def get_subtitles(request: VideoRequest):
                 pattern = f"/tmp/{video_id}.*.vtt"
                 vtt_files = glob.glob(pattern)
             
-            if not vtt_files:
-                raise FileNotFoundError(f"No subtitle files found for {video_id}")
+            if vtt_files:
+                # Subtitles found, use them
+                print(f"✅ Found subtitles for {video_id}")
+                vtt_file = vtt_files[0]
+                
+                with open(vtt_file, 'r', encoding='utf-8') as f:
+                    vtt_content = f.read()
+                
+                cues = parse_vtt(vtt_content)
+                
+                transcribed_part = {}
+                for cue in cues:
+                    transcribed_part[cue['start']] = cue['text']
+                
+                result = {
+                    "video_id": video_id,
+                    "title": title,
+                    "page": 1,
+                    "total_pages": 1,
+                    "transcribed_part": transcribed_part,
+                    "transcription_method": "subtitles"
+                }
+                
+                save_to_cache(url, result)
+                
+                for f in glob.glob(f"/tmp/{video_id}.*"):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
+                
+                return result
+            else:
+                # No subtitles found, fallback to audio transcription
+                print(f"⚠️ No subtitles found for {video_id}, falling back to audio transcription...")
+                
+    except Exception as e:
+        print(f"⚠️ Error getting subtitles: {e}, falling back to audio transcription...")
+    
+    # Fallback: Download audio and transcribe with Whisper
+    print(f"🎵 Downloading audio for transcription: {url}")
+    request_id = str(uuid.uuid4())
+    temp_dir = f"/tmp/{request_id}"
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    ydl_opts_audio = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'{temp_dir}/%(id)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_id = info.get('id')
+            title = info.get('title', 'Untitled Video')
             
-            vtt_file = vtt_files[0]
+            files = glob.glob(f"{temp_dir}/{video_id}.*")
+            if not files:
+                raise HTTPException(status_code=404, detail="Failed to download audio file.")
             
-            with open(vtt_file, 'r', encoding='utf-8') as f:
-                vtt_content = f.read()
+            audio_file = files[0]
+            file_size = os.path.getsize(audio_file)
+            print(f"📥 Downloaded audio file: {audio_file}, size: {file_size} bytes")
             
-            cues = parse_vtt(vtt_content)
+            if file_size == 0:
+                raise HTTPException(status_code=500, detail="Downloaded audio file is empty.")
+            
+            try:
+                import time
+                file_size_mb = file_size / (1024 * 1024)
+                estimated_time = int(file_size_mb * 2)
+                print(f"🎙️ Starting transcription with faster_whisper (GPU)...")
+                print(f"File size: {file_size_mb:.1f}MB, estimated time: ~{estimated_time}s")
+                
+                global WHISPER_MODEL
+                if WHISPER_MODEL is None:
+                    raise RuntimeError("GPU model not loaded. Server startup may have failed.")
+                
+                start_time = time.time()
+                segments, info = WHISPER_MODEL.transcribe(audio_file, beam_size=5)
+                elapsed_time = time.time() - start_time
+                print(f"✅ Transcription completed in {elapsed_time:.1f}s")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=f"Whisper transcription failed: {str(e)}")
             
             transcribed_part = {}
-            for cue in cues:
-                transcribed_part[cue['start']] = cue['text']
+            for segment in segments:
+                start = int(segment.start)
+                text = segment.text.strip()
+                transcribed_part[start] = text
             
             result = {
                 "video_id": video_id,
                 "title": title,
                 "page": 1,
                 "total_pages": 1,
-                "transcribed_part": transcribed_part
+                "transcribed_part": transcribed_part,
+                "transcription_method": "whisper"
             }
             
             save_to_cache(url, result)
             
-            for f in glob.glob(f"/tmp/{video_id}.*"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-            
             return result
             
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 class PodcastRequest(BaseModel):
     url: str
@@ -746,6 +828,99 @@ def get_apple_podcast_subtitles(request: VideoRequest):
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
+class VideoSummaryRequest(BaseModel):
+    url: str
+    custom_prompt: Optional[str] = None
+
+@app.post("/youtube/summary")
+def summarize_youtube_video(request: VideoSummaryRequest):
+    """Summarize a single YouTube video"""
+    print(f"📺 Processing video summary request: {request.url}")
+    
+    # Generate cache key
+    cache_key_data = f"{request.url}|{request.custom_prompt or 'default'}"
+    cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()
+    cache_file = CACHE_DIR / f"summary_{cache_key}.json"
+    
+    view_base_url = "https://be.0xfanslab.com/youtube/channel/summary"
+    
+    # Check cache
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached_data = json.load(f)
+                print(f"✅ Summary cache HIT for video: {request.url[:50]}...")
+                result = cached_data["result"]
+                result["view_url"] = f"{view_base_url}?id={cache_key}"
+                return result
+        except Exception as e:
+            print(f"⚠️ Cache read error: {e}")
+    
+    print(f"❌ Summary cache MISS for video: {request.url[:50]}...")
+    
+    try:
+        # Get video subtitles
+        print(f"📝 Fetching subtitles for: {request.url}")
+        video_request = VideoRequest(url=request.url)
+        subtitle_result = get_subtitles(video_request)
+        
+        # Format subtitle text with timestamps
+        subtitle_text = " ".join([f"[{ts}] {text}" for ts, text in subtitle_result['transcribed_part'].items()])
+        
+        # Prepare content for summarization
+        video_content = f"影片: {subtitle_result['title']}\n內容: {subtitle_text}"
+        
+        # Generate AI summary
+        print("🤖 Generating AI summary...")
+        summary, chunks = summarize_with_claude(video_content, request.custom_prompt)
+        
+        # Prepare result
+        result = {
+            "video_url": request.url,
+            "video_id": subtitle_result['video_id'],
+            "title": subtitle_result['title'],
+            "summary": summary,
+            "chunks": chunks,
+            "generated_at": datetime.now().isoformat(),
+            "raw": video_content,
+            "view_url": f"{view_base_url}?id={cache_key}"
+        }
+        
+        # Save to cache
+        try:
+            cache_data = {
+                "request": {
+                    "url": request.url,
+                    "custom_prompt": request.custom_prompt
+                },
+                "cached_at": datetime.now().isoformat(),
+                "result": result
+            }
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            print(f"💾 Saved summary to cache: {cache_file.name}")
+            
+            # Save chunk list separately if chunks exist
+            if chunks:
+                chunk_list_file = CACHE_DIR / f"chunk_list_{cache_key}.json"
+                with open(chunk_list_file, 'w', encoding='utf-8') as f:
+                    json.dump({"chunks": chunks}, f, ensure_ascii=False, indent=2)
+                print(f"💾 Saved chunk list to cache: {chunk_list_file.name}")
+                
+        except Exception as e:
+            print(f"⚠️ Failed to save summary cache: {e}")
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error in video summarization: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video summarization failed: {str(e)}"
+        )
+
 class ChannelSummaryRequest(BaseModel):
     url: str
     max_videos: int = 5
@@ -764,21 +939,54 @@ def summarize_youtube_channel(request: ChannelSummaryRequest):
     
     view_base_url = "https://be.0xfanslab.com/youtube/channel/summary"
     
-    if cache_file.exists():
+    # Get current latest videos to check if cache is still valid
+    try:
+        current_videos = get_channel_videos(request.url, max_videos)
+        latest_video_urls = [video['url'] for video in current_videos]
+        print(f"📡 Current latest video(s): {len(latest_video_urls)} found")
+    except Exception as e:
+        print(f"⚠️ Failed to fetch current videos: {e}")
+        current_videos = None
+        latest_video_urls = None
+    
+    # Check cache with freshness validation
+    if cache_file.exists() and latest_video_urls:
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 cached_data = json.load(f)
-                print(f"✅ Summary cache HIT for channel: {request.url[:50]}...")
+                
+                cached_video_urls = cached_data.get("latest_video_urls", [])
+                
+                if cached_video_urls == latest_video_urls:
+                    print(f"✅ Summary cache HIT for channel: {request.url[:50]}...")
+                    print(f"✅ Cache is fresh (latest video unchanged)")
+                    result = cached_data["result"]
+                    result["view_url"] = f"{view_base_url}?id={cache_key}"
+                    return result
+                else:
+                    print(f"🔄 Cache exists but STALE (new video detected)")
+                    print(f"   Cached: {cached_video_urls}")
+                    print(f"   Current: {latest_video_urls}")
+        except Exception as e:
+            print(f"⚠️ Cache read error: {e}")
+    elif cache_file.exists():
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached_data = json.load(f)
+                print(f"✅ Summary cache HIT (freshness check skipped)")
                 result = cached_data["result"]
                 result["view_url"] = f"{view_base_url}?id={cache_key}"
                 return result
         except Exception as e:
             print(f"⚠️ Cache read error: {e}")
-    
+            
     print(f"❌ Summary cache MISS for channel: {request.url[:50]}...")
     
     try:
-        videos = get_channel_videos(request.url, max_videos)
+        if current_videos is None:
+            videos = get_channel_videos(request.url, max_videos)
+        else:
+            videos = current_videos
         
         if not videos:
             raise HTTPException(status_code=404, detail="No videos found in channel")
@@ -850,6 +1058,7 @@ def summarize_youtube_channel(request: ChannelSummaryRequest):
                     "custom_prompt": request.custom_prompt
                 },
                 "cached_at": datetime.now().isoformat(),
+                "latest_video_urls": [video['url'] for video in videos],
                 "result": result
             }
             with open(cache_file, 'w', encoding='utf-8') as f:
@@ -1150,6 +1359,88 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 def serve_summary_viewer():
     """Serve the summary viewer page"""
     return FileResponse("static/summary_viewer.html")
+
+@app.get("/twstock/{stock_id}")
+def get_taiwan_stock(stock_id: str):
+    """Query Taiwan Stock Exchange API for stock information"""
+    print(f"📈 Querying Taiwan stock: {stock_id}")
+    
+    try:
+        # TWSE API endpoint for real-time stock info
+        # This endpoint provides real-time stock information from Taiwan Stock Exchange
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Check if we got valid data
+        # TSE returns incomplete data (only tv, s, c, z fields) when stock is not found in TSE
+        if 'msgArray' not in data or len(data['msgArray']) == 0 or 'n' not in data['msgArray'][0]:
+            # Try OTC (over-the-counter) market
+            url_otc = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=otc_{stock_id}.tw"
+            response_otc = requests.get(url_otc, headers=headers, timeout=10)
+            response_otc.raise_for_status()
+            data_otc = response_otc.json()
+            
+            if 'msgArray' not in data_otc or len(data_otc['msgArray']) == 0 or 'n' not in data_otc['msgArray'][0]:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Stock {stock_id} not found in TWSE or OTC markets"
+                )
+            data = data_otc
+        
+        stock_info = data['msgArray'][0]
+        
+        # Format the response with useful information
+        result = {
+            "stock_id": stock_id,
+            "name": stock_info.get('n', 'N/A'),  # Stock name
+            "full_name": stock_info.get('nf', 'N/A'),  # Full name
+            "current_price": stock_info.get('z', 'N/A'),  # Current price
+            "opening_price": stock_info.get('o', 'N/A'),  # Opening price
+            "highest_price": stock_info.get('h', 'N/A'),  # Highest price
+            "lowest_price": stock_info.get('l', 'N/A'),  # Lowest price
+            "yesterday_price": stock_info.get('y', 'N/A'),  # Yesterday's closing price
+            "change": stock_info.get('z', 'N/A'),  # Price change
+            "volume": stock_info.get('v', 'N/A'),  # Trading volume
+            "timestamp": stock_info.get('t', 'N/A'),  # Timestamp
+            "exchange": stock_info.get('ex', 'N/A'),  # Exchange (tse/otc)
+            "raw_data": stock_info  # Include raw data for reference
+        }
+        
+        # Calculate price change and percentage if possible
+        try:
+            if result['current_price'] != 'N/A' and result['yesterday_price'] != 'N/A':
+                current = float(result['current_price'])
+                yesterday = float(result['yesterday_price'])
+                change = current - yesterday
+                change_percent = (change / yesterday) * 100
+                result['price_change'] = round(change, 2)
+                result['price_change_percent'] = round(change_percent, 2)
+        except (ValueError, ZeroDivisionError):
+            pass
+        
+        print(f"✅ Successfully retrieved stock info for {stock_id}: {result.get('name', 'N/A')}")
+        return result
+        
+    except requests.RequestException as e:
+        print(f"❌ Error fetching stock data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch stock data from TWSE API: {str(e)}"
+        )
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

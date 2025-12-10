@@ -1,0 +1,15 @@
+[Unit]
+Description=YT MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=%USER%
+WorkingDirectory=%WORKDIR%
+Environment="LD_LIBRARY_PATH=%WORKDIR%/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:%WORKDIR%/.venv/lib/python3.12/site-packages/nvidia/cublas/lib"
+ExecStart=%HOME%/.local/bin/uv run python ubuntu_backend.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
